@@ -7,7 +7,7 @@
    - Every `MovementEntry` at `/users/{userId}/challenges/{challengeId}/movements/{movementId}` requires the parent challenge to exist and belong to `request.auth.uid`, and is immutable (`allow update: if false`).
    - Every `BackupSnapshot` at `/users/{userId}/backups/{backupId}` requires `/users/{userId}` to exist and belong to `request.auth.uid`, and is immutable (`allow update: if false`).
 3. **Immutability & Temporal Integrity**: `uid`, `id`, `ownerId`, `challengeId`, and `createdAt` are immutable after creation. `createdAt` and `updatedAt` must equal `request.time`.
-4. **Volumetric & Type Safety**: `paidDeposits` and `customNotes` maps are bounded to `size() <= 365`. All string fields have explicit `.size()` bounds. All IDs match `^[a-zA-Z0-9_\-]+$` with length `<= 128`.
+4. **Volumetric & Type Safety**: `paidDeposits` and `customNotes` maps are bounded to `size() <= 365`. `layoutPrefs` lists are bounded (`<= 50` participant IDs, `<= 10` static-allowlisted UI keys). All string fields have explicit `.size()` bounds. All IDs match `^[a-zA-Z0-9_\-]+$` with length `<= 128`.
 5. **Action-Based Updates & Zero Ghost Fields**: `hasAll()` + `hasOnly()` on creation/validation, combined with `affectedKeys().hasOnly(...)` on every update action.
 6. **Verified Email Gate**: All write operations require `request.auth.token.email_verified == true`.
 

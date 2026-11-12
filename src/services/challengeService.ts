@@ -47,12 +47,106 @@ export interface ChallengeItem {
   observacoes: string;
 }
 
+export type AppTabId = 'grid' | 'dashboard' | 'table' | 'history' | 'names' | 'accounts' | 'guide';
+export type DashboardBlockId = 'filters' | 'scorecards' | 'cumulativeChart' | 'monthlyCharts' | 'monthlyTable';
+export type DepositTableColumnId = 'status' | 'numero' | 'mes' | 'trimestre' | 'valor' | 'data' | 'observacoes';
+
+export interface LayoutPrefs {
+  participantOrder: string[];
+  tabOrder: AppTabId[];
+  dashboardOrder: DashboardBlockId[];
+  tableColumnOrder: DepositTableColumnId[];
+}
+
+export const DEFAULT_TAB_ORDER: AppTabId[] = [
+  'grid',
+  'dashboard',
+  'table',
+  'history',
+  'names',
+  'accounts',
+  'guide',
+];
+
+export const DEFAULT_DASHBOARD_ORDER: DashboardBlockId[] = [
+  'filters',
+  'scorecards',
+  'cumulativeChart',
+  'monthlyCharts',
+  'monthlyTable',
+];
+
+export const DEFAULT_TABLE_COLUMN_ORDER: DepositTableColumnId[] = [
+  'status',
+  'numero',
+  'mes',
+  'trimestre',
+  'valor',
+  'data',
+  'observacoes',
+];
+
+export const DEFAULT_LAYOUT_PREFS: LayoutPrefs = {
+  participantOrder: [],
+  tabOrder: [...DEFAULT_TAB_ORDER],
+  dashboardOrder: [...DEFAULT_DASHBOARD_ORDER],
+  tableColumnOrder: [...DEFAULT_TABLE_COLUMN_ORDER],
+};
+
+function mergeOrderedAllowlist<T extends string>(raw: unknown, defaults: readonly T[]): T[] {
+  const allowed = new Set<string>(defaults);
+  const result: T[] = [];
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === 'string' && allowed.has(item) && !result.includes(item as T)) {
+        result.push(item as T);
+      }
+    }
+  }
+  for (const d of defaults) {
+    if (!result.includes(d)) {
+      result.push(d);
+    }
+  }
+  return result;
+}
+
+export function normalizeLayoutPrefs(raw?: Partial<LayoutPrefs> | null): LayoutPrefs {
+  const participantOrder: string[] = [];
+  if (Array.isArray(raw?.participantOrder)) {
+    for (const id of raw.participantOrder) {
+      if (
+        typeof id === 'string' &&
+        /^[a-zA-Z0-9_-]{1,128}$/.test(id) &&
+        !participantOrder.includes(id) &&
+        participantOrder.length < 50
+      ) {
+        participantOrder.push(id);
+      }
+    }
+  }
+
+  return {
+    participantOrder,
+    tabOrder: mergeOrderedAllowlist<AppTabId>(raw?.tabOrder, DEFAULT_TAB_ORDER),
+    dashboardOrder: mergeOrderedAllowlist<DashboardBlockId>(
+      raw?.dashboardOrder,
+      DEFAULT_DASHBOARD_ORDER
+    ),
+    tableColumnOrder: mergeOrderedAllowlist<DepositTableColumnId>(
+      raw?.tableColumnOrder,
+      DEFAULT_TABLE_COLUMN_ORDER
+    ),
+  };
+}
+
 export interface UserProfileDoc {
   uid: string;
   displayName: string;
   email: string;
   photoURL: string;
   activeChallengeId?: string;
+  layoutPrefs?: LayoutPrefs;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -544,6 +638,22 @@ export async function setActiveChallengeId(
   try {
     await updateDoc(doc(db, 'users', userId), {
       activeChallengeId: challengeId ? challengeId : deleteField(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function saveUserLayoutPrefs(
+  userId: string,
+  prefs: Partial<LayoutPrefs>
+): Promise<void> {
+  const path = `users/${userId}`;
+  const cleanPrefs = normalizeLayoutPrefs(prefs);
+  try {
+    await updateDoc(doc(db, 'users', userId), {
+      layoutPrefs: cleanPrefs,
       updatedAt: serverTimestamp(),
     });
   } catch (error) {

@@ -26,6 +26,8 @@ import {
   ShieldCheck,
   UserPlus,
 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
+import { OfflineIndicator } from './OfflineIndicator';
 
 type AuthMode = 'login' | 'register' | 'reset';
 
@@ -135,6 +137,7 @@ export const AuthGate: React.FC = () => {
           displayName: trimmedName.slice(0, 120),
         });
         await sendEmailVerification(cred.user);
+        await cred.user.reload();
       } catch (err) {
         setErrorMsg(translateFirebaseAuthError(err));
       } finally {
@@ -172,12 +175,16 @@ export const AuthGate: React.FC = () => {
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium">
-            <Lock className="w-3.5 h-3.5" />
-            <span>Acesso Seguro</span>
+          <div className="flex items-center gap-2.5">
+            <PWAInstallButton />
+            <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium">
+              <Lock className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Acesso Seguro</span>
+            </div>
           </div>
         </div>
       </header>
+      <OfflineIndicator />
 
       {/* Main Auth Card */}
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
@@ -228,7 +235,7 @@ export const AuthGate: React.FC = () => {
                   }`}
                 >
                   <UserPlus className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Criar Conta</span>
+                  <span>Criar Minha Conta</span>
                 </button>
               </div>
             ) : (

@@ -37,6 +37,10 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "layoutPrefs": {
+          "type": "object",
+          "description": "User layout ordering preferences for participants, navigation tabs, dashboard sections, and table columns."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

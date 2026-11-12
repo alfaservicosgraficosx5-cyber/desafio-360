@@ -31,10 +31,29 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    // Validation Helper: Layout Preferences (strictly bounded & allowlisted)
+    function isValidLayoutPrefs(prefs) {
+      return prefs is map
+        && prefs.keys().hasAll(['participantOrder', 'tabOrder', 'dashboardOrder', 'tableColumnOrder'])
+        && prefs.keys().hasOnly(['participantOrder', 'tabOrder', 'dashboardOrder', 'tableColumnOrder'])
+        && prefs.participantOrder is list
+        && prefs.participantOrder.size() <= 50
+        && (prefs.participantOrder.size() == 0 || (prefs.participantOrder[0] is string && isValidId(prefs.participantOrder[0])))
+        && prefs.tabOrder is list
+        && prefs.tabOrder.size() <= 10
+        && prefs.tabOrder.hasOnly(['grid', 'dashboard', 'table', 'history', 'names', 'accounts', 'guide'])
+        && prefs.dashboardOrder is list
+        && prefs.dashboardOrder.size() <= 10
+        && prefs.dashboardOrder.hasOnly(['filters', 'scorecards', 'cumulativeChart', 'monthlyCharts', 'monthlyTable'])
+        && prefs.tableColumnOrder is list
+        && prefs.tableColumnOrder.size() <= 10
+        && prefs.tableColumnOrder.hasOnly(['status', 'numero', 'mes', 'trimestre', 'valor', 'data', 'observacoes']);
+    }
+
     // Validation Blueprint: UserProfile
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'activeChallengeId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'activeChallengeId', 'layoutPrefs', 'createdAt', 'updatedAt'])
         && data.uid is string
         && data.uid == request.auth.uid
         && data.uid == userId
@@ -48,6 +67,7 @@ service cloud.firestore {
         && data.photoURL is string
         && data.photoURL.size() <= 500
         && (!data.keys().hasAny(['activeChallengeId']) || (data.activeChallengeId is string && isValidId(data.activeChallengeId)))
+        && (!data.keys().hasAny(['layoutPrefs']) || isValidLayoutPrefs(data.layoutPrefs))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -162,6 +182,7 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'activeChallengeId', 'updatedAt'])
           || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt'])
           || incoming().diff(existing()).affectedKeys().hasOnly(['activeChallengeId', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['layoutPrefs', 'updatedAt'])
         );
 
       allow delete: if false;

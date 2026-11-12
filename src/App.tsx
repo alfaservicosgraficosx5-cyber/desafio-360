@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import {
+  ArrowDown,
   ArrowDownRight,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
   BarChart3,
   Calculator,
   Calendar,
@@ -12,11 +17,14 @@ import {
   Download,
   FileSpreadsheet,
   Filter,
+  GripVertical,
   History,
   Layers,
   LayoutGrid,
   Loader2,
   LogOut,
+  Move,
+  Pencil,
   PieChart,
   Plus,
   RotateCcw,
@@ -26,6 +34,7 @@ import {
   Target,
   TrendingDown,
   TrendingUp,
+  UserPlus,
   Users,
   Wallet,
   X,
@@ -33,6 +42,7 @@ import {
 
 import { auth } from './lib/firebase';
 import {
+  AppTabId,
   BackupSnapshotDoc,
   BASE_DAILY_GOAL,
   buildChallengeItems,
@@ -42,16 +52,21 @@ import {
   clearAllDepositsInFirestore,
   createChallengeInstance,
   createCloudBackup,
+  DashboardBlockId,
   deleteChallengeInstance,
   deleteCloudBackup,
+  DepositTableColumnId,
   ensureUserProfile,
   InitialSeedMode,
+  LayoutPrefs,
   MarkerColor,
   MONTHS_DISTRIBUTION,
   MovementEntryDoc,
+  normalizeLayoutPrefs,
   renameChallengeInstance,
   replaceChallengeDepositsInFirestore,
   restoreCloudBackup,
+  saveUserLayoutPrefs,
   setActiveChallengeId,
   subscribeChallengeMovements,
   subscribeUserBackups,
@@ -62,11 +77,20 @@ import {
   updateChallengeMarkerColor,
   UserProfileDoc,
 } from './services/challengeService';
+import { AccountManagementPanel } from './components/AccountManagementPanel';
 import { AuthGate, EmailVerificationGate } from './components/AuthGate';
 import { ChallengeInstanceModal } from './components/ChallengeInstanceModal';
+import { ChallengeNamesTab } from './components/ChallengeNamesTab';
 import { ChallengeSheetGrid } from './components/ChallengeSheetGrid';
 import { CumulativeLineChart } from './components/CumulativeLineChart';
+import {
+  DASHBOARD_BLOCK_META,
+  LayoutOrganizerModal,
+  TABLE_COLUMN_META,
+} from './components/LayoutOrganizerModal';
 import { MovementHistoryPanel } from './components/MovementHistoryPanel';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { PWAInstallButton } from './components/PWAInstallButton';
 import { StorageBackupModal } from './components/StorageBackupModal';
 
 export default function App() {
@@ -84,8 +108,15 @@ export default function App() {
 
   const [isInstanceModalOpen, setIsInstanceModalOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [isOrganizerOpen, setIsOrganizerOpen] = useState(false);
+  const [isInlineMoveMode, setIsInlineMoveMode] = useState(false);
+  const [optimisticLayoutPrefs, setOptimisticLayoutPrefs] = useState<LayoutPrefs | null>(null);
+  const [dragState, setDragState] = useState<{
+    kind: 'participant' | 'tab' | 'dashboard' | 'column';
+    index: number;
+  } | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'grid' | 'dashboard' | 'table' | 'history' | 'guide'>('grid');
+  const [activeTab, setActiveTab] = useState<AppTabId>('grid');
   const [filterMonth, setFilterMonth] = useState<string>('Todos');
   const [filterStatus, setFilterStatus] = useState<string>('Todos');
   const [filterQuarter, setFilterQuarter] = useState<string>('Todos');
@@ -103,6 +134,10 @@ export default function App() {
     setFirestoreError(null);
     setIsInstanceModalOpen(false);
     setIsBackupModalOpen(false);
+    setIsOrganizerOpen(false);
+    setIsInlineMoveMode(false);
+    setOptimisticLayoutPrefs(null);
+    setDragState(null);
     setActiveTab('grid');
     setFilterMonth('Todos');
     setFilterStatus('Todos');
@@ -188,15 +223,34 @@ export default function App() {
     };
   }, [authReady, user, isVerified, profileReady]);
 
+  const layoutPrefs: LayoutPrefs = useMemo(
+    () => optimisticLayoutPrefs ?? normalizeLayoutPrefs(userProfile?.layoutPrefs),
+    [optimisticLayoutPrefs, userProfile?.layoutPrefs]
+  );
+
+  // Order challenges according to user's saved participantOrder
+  const orderedChallenges: ChallengeInstanceDoc[] = useMemo(() => {
+    const order = layoutPrefs.participantOrder;
+    if (order.length === 0) return challenges;
+    const rank = new Map<string, number>();
+    order.forEach((id, idx) => rank.set(id, idx));
+    return [...challenges].sort((a, b) => {
+      const ra = rank.has(a.id) ? (rank.get(a.id) as number) : Number.MAX_SAFE_INTEGER;
+      const rb = rank.has(b.id) ? (rank.get(b.id) as number) : Number.MAX_SAFE_INTEGER;
+      if (ra !== rb) return ra - rb;
+      return 0;
+    });
+  }, [challenges, layoutPrefs.participantOrder]);
+
   // Determine the currently active challenge instance
   const activeChallenge: ChallengeInstanceDoc | null = useMemo(() => {
-    if (challenges.length === 0) return null;
+    if (orderedChallenges.length === 0) return null;
     if (userProfile?.activeChallengeId) {
-      const found = challenges.find((c) => c.id === userProfile.activeChallengeId);
+      const found = orderedChallenges.find((c) => c.id === userProfile.activeChallengeId);
       if (found) return found;
     }
-    return challenges[0];
-  }, [challenges, userProfile]);
+    return orderedChallenges[0];
+  }, [orderedChallenges, userProfile]);
 
   // Subscribe to immutable movement history for the active challenge
   useEffect(() => {
@@ -394,6 +448,47 @@ export default function App() {
     }
   };
 
+  const reorderList = <T,>(arr: T[], from: number, to: number): T[] => {
+    if (from === to || from < 0 || to < 0 || from >= arr.length || to >= arr.length) return arr;
+    const next = [...arr];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    return next;
+  };
+
+  const handleUpdateLayoutPrefs = async (next: LayoutPrefs) => {
+    const normalized = normalizeLayoutPrefs(next);
+    setOptimisticLayoutPrefs(normalized);
+    if (!user) return;
+    try {
+      await saveUserLayoutPrefs(user.uid, normalized);
+    } catch (err) {
+      console.error('Failed to save layout preferences:', err);
+      setFirestoreError(err instanceof Error ? err.message : 'Erro ao salvar organização no Firestore.');
+    }
+  };
+
+  const moveParticipant = (fromIndex: number, toIndex: number) => {
+    const ids = orderedChallenges.map((c) => c.id);
+    const nextIds = reorderList(ids, fromIndex, toIndex);
+    handleUpdateLayoutPrefs({ ...layoutPrefs, participantOrder: nextIds });
+  };
+
+  const moveTab = (fromIndex: number, toIndex: number) => {
+    const nextTabs = reorderList(layoutPrefs.tabOrder, fromIndex, toIndex);
+    handleUpdateLayoutPrefs({ ...layoutPrefs, tabOrder: nextTabs });
+  };
+
+  const moveDashboardBlock = (fromIndex: number, toIndex: number) => {
+    const nextDash = reorderList(layoutPrefs.dashboardOrder, fromIndex, toIndex);
+    handleUpdateLayoutPrefs({ ...layoutPrefs, dashboardOrder: nextDash });
+  };
+
+  const moveTableColumn = (fromIndex: number, toIndex: number) => {
+    const nextCols = reorderList(layoutPrefs.tableColumnOrder, fromIndex, toIndex);
+    handleUpdateLayoutPrefs({ ...layoutPrefs, tableColumnOrder: nextCols });
+  };
+
   // Filtered deposits
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -565,6 +660,33 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2">
+            <PWAInstallButton />
+
+            {/* Always-Accessible Layout Organizer & Inline Move Mode */}
+            <button
+              type="button"
+              onClick={() => setIsInlineMoveMode((v) => !v)}
+              className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer border ${
+                isInlineMoveMode
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-xs'
+                  : 'text-slate-200 bg-slate-800 hover:bg-slate-700 border-slate-700'
+              }`}
+              title="Ativar ou desativar setas e alças para arrastar direto na tela"
+            >
+              <Move className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">{isInlineMoveMode ? 'Movendo' : 'Mover'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsOrganizerOpen(true)}
+              className="px-2.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+              title="Abrir organizador de ordem de pessoas, ícones e tabelas a qualquer momento"
+            >
+              <ArrowUpDown className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Organizar</span>
+            </button>
+
             {/* Switch / Create Instance Button */}
             <button
               onClick={() => setIsInstanceModalOpen(true)}
@@ -572,7 +694,7 @@ export default function App() {
               title="Gerenciar ou criar nova instância do desafio"
             >
               <Layers className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Instâncias ({challenges.length})</span>
+              <span className="hidden sm:inline">Instâncias ({orderedChallenges.length})</span>
             </button>
 
             <button
@@ -628,36 +750,84 @@ export default function App() {
           </div>
         </div>
 
-        {/* Participant / Family Quick Switcher Strip */}
-        {challenges.length > 0 && (
+        {/* Participant / Family Quick Switcher Strip (Draggable & Reorderable) */}
+        {orderedChallenges.length > 0 && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center gap-1.5 border-t border-slate-800/80 py-1.5 overflow-x-auto text-[11px]">
-            <span className="text-slate-400 font-medium flex items-center gap-1 shrink-0 mr-1">
+            <span
+              className="text-slate-400 font-medium flex items-center gap-1 shrink-0 mr-1"
+              title="Arraste as pessoas para alterar a ordem"
+            >
               <Users className="w-3.5 h-3.5 text-emerald-400" />
               <span className="hidden sm:inline">Participantes:</span>
             </span>
-            {challenges.map((ch) => {
+            {orderedChallenges.map((ch, idx) => {
               const isActive = ch.id === activeChallenge?.id;
               const paidCountForCh = Object.keys(ch.paidDeposits || {}).length;
               return (
-                <button
+                <div
                   key={ch.id}
-                  onClick={() => handleSelectChallenge(ch.id)}
-                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 border ${
+                  draggable
+                  onDragStart={() => setDragState({ kind: 'participant', index: idx })}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => {
+                    if (dragState?.kind === 'participant') {
+                      moveParticipant(dragState.index, idx);
+                    }
+                    setDragState(null);
+                  }}
+                  onDragEnd={() => setDragState(null)}
+                  title="Clique para abrir ou arraste para reordenar"
+                  className={`rounded-md font-medium transition-colors flex items-center gap-1 shrink-0 border ${
                     isActive
                       ? 'bg-slate-800 text-white border-emerald-500/70 shadow-2xs'
                       : 'bg-slate-900/40 text-slate-300 border-slate-800 hover:bg-slate-800 hover:text-white'
-                  }`}
+                  } ${isInlineMoveMode ? 'px-1.5 py-0.5 ring-1 ring-amber-400/40' : ''}`}
                 >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${
-                      isActive ? 'bg-emerald-400' : 'bg-slate-500'
+                  {isInlineMoveMode && (
+                    <button
+                      type="button"
+                      disabled={idx === 0}
+                      onClick={() => moveParticipant(idx, idx - 1)}
+                      className="p-0.5 text-amber-300 hover:text-white disabled:opacity-30 cursor-pointer"
+                      title="Mover pessoa para a esquerda"
+                    >
+                      <ArrowLeft className="w-3 h-3" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleSelectChallenge(ch.id)}
+                    className={`flex items-center gap-1.5 cursor-pointer ${
+                      isInlineMoveMode ? 'px-1 py-0.5' : 'px-2.5 py-1'
                     }`}
-                  />
-                  <span className="max-w-[140px] truncate font-semibold">{ch.title}</span>
-                  <span className="text-[10px] font-mono text-slate-400">
-                    {paidCountForCh}/365
-                  </span>
-                </button>
+                  >
+                    <GripVertical
+                      className={`w-3 h-3 text-slate-500 shrink-0 ${
+                        isInlineMoveMode ? 'text-amber-400' : 'opacity-60 hover:opacity-100'
+                      }`}
+                    />
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        isActive ? 'bg-emerald-400' : 'bg-slate-500'
+                      }`}
+                    />
+                    <span className="max-w-[140px] truncate font-semibold">{ch.title}</span>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {paidCountForCh}/365
+                    </span>
+                  </button>
+                  {isInlineMoveMode && (
+                    <button
+                      type="button"
+                      disabled={idx === orderedChallenges.length - 1}
+                      onClick={() => moveParticipant(idx, idx + 1)}
+                      className="p-0.5 text-amber-300 hover:text-white disabled:opacity-30 cursor-pointer"
+                      title="Mover pessoa para a direita"
+                    >
+                      <ArrowRight className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
               );
             })}
             <button
@@ -668,68 +838,141 @@ export default function App() {
               <Plus className="w-3 h-3" />
               <span>Adicionar pessoa</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setIsOrganizerOpen(true)}
+              className="px-2 py-1 rounded-md font-medium text-blue-300 hover:text-white hover:bg-slate-800 border border-slate-700 transition-colors cursor-pointer flex items-center gap-1 shrink-0 ml-auto"
+              title="Organizar ordem das pessoas, ícones e tabelas"
+            >
+              <ArrowUpDown className="w-3 h-3" />
+              <span>Ordem</span>
+            </button>
           </div>
         )}
 
-        {/* View Switcher Tabs */}
+        {/* View Switcher Tabs (Dynamic Order + Drag & Drop) */}
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center gap-2 border-t border-slate-800/80 pt-1.5 pb-2 overflow-x-auto text-xs">
-          <button
-            onClick={() => setActiveTab('grid')}
-            className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'grid'
-                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>Minha Grade de 365 Quadrinhos (1 Clique)</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'dashboard'
-                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            <span>Dashboard Executivo (Looker Studio)</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('table')}
-            className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'table'
-                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Planilha Detalhada (365 Linhas)</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('history')}
-            className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'history'
-                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <History className="w-3.5 h-3.5" />
-            <span>Histórico de Movimentações ({movements.length})</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('guide')}
-            className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'guide'
-                ? 'bg-emerald-600 text-white font-semibold shadow-xs'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Fórmulas & Passo a Passo Looker Studio</span>
-          </button>
+          {layoutPrefs.tabOrder.map((tabId, idx) => {
+            const isTabActive = activeTab === tabId;
+            const tabConfig: Record<AppTabId, { icon: React.ReactNode; label: string }> = {
+              grid: {
+                icon: <LayoutGrid className="w-3.5 h-3.5" />,
+                label: 'Minha Grade de 365 Quadrinhos (1 Clique)',
+              },
+              dashboard: {
+                icon: <BarChart3 className="w-3.5 h-3.5" />,
+                label: 'Dashboard Executivo (Looker Studio)',
+              },
+              table: {
+                icon: <FileSpreadsheet className="w-3.5 h-3.5" />,
+                label: 'Planilha Detalhada (365 Linhas)',
+              },
+              history: {
+                icon: <History className="w-3.5 h-3.5" />,
+                label: `Histórico de Movimentações (${movements.length})`,
+              },
+              names: {
+                icon: <Pencil className="w-3.5 h-3.5" />,
+                label: 'Renomear & Participantes',
+              },
+              accounts: {
+                icon: <UserPlus className="w-3.5 h-3.5" />,
+                label: 'Contas (Criar / Trocar)',
+              },
+              guide: {
+                icon: <Sparkles className="w-3.5 h-3.5" />,
+                label: 'Fórmulas & Passo a Passo Looker Studio',
+              },
+            };
+            const cfg = tabConfig[tabId];
+
+            return (
+              <div
+                key={tabId}
+                draggable
+                onDragStart={() => setDragState({ kind: 'tab', index: idx })}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => {
+                  if (dragState?.kind === 'tab') {
+                    moveTab(dragState.index, idx);
+                  }
+                  setDragState(null);
+                }}
+                onDragEnd={() => setDragState(null)}
+                className={`rounded-md flex items-center shrink-0 transition-colors ${
+                  isTabActive
+                    ? 'bg-emerald-600 text-white font-semibold shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                } ${isInlineMoveMode ? 'ring-1 ring-amber-400/50 px-1' : ''}`}
+                title="Clique para abrir ou arraste para mover este ícone/aba"
+              >
+                {isInlineMoveMode && (
+                  <button
+                    type="button"
+                    disabled={idx === 0}
+                    onClick={() => moveTab(idx, idx - 1)}
+                    className="p-0.5 text-amber-300 hover:text-white disabled:opacity-30 cursor-pointer"
+                    title="Mover aba para a esquerda"
+                  >
+                    <ArrowLeft className="w-3 h-3" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab(tabId)}
+                  className={`py-1 font-medium cursor-pointer flex items-center gap-1.5 ${
+                    isInlineMoveMode ? 'px-1.5' : 'px-3'
+                  }`}
+                >
+                  {isInlineMoveMode && <GripVertical className="w-3 h-3 text-amber-300 shrink-0" />}
+                  {cfg.icon}
+                  <span>{cfg.label}</span>
+                </button>
+                {isInlineMoveMode && (
+                  <button
+                    type="button"
+                    disabled={idx === layoutPrefs.tabOrder.length - 1}
+                    onClick={() => moveTab(idx, idx + 1)}
+                    className="p-0.5 text-amber-300 hover:text-white disabled:opacity-30 cursor-pointer"
+                    title="Mover aba para a direita"
+                  >
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </header>
+
+      {isInlineMoveMode && (
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 text-xs">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Move className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                <strong>Modo Movimentação Direta ativo:</strong> arraste ou use as setas nos participantes, ícones das abas, blocos do dashboard e colunas da tabela.
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsOrganizerOpen(true)}
+                className="px-2.5 py-1 bg-white border border-amber-300 rounded-md font-semibold text-amber-900 hover:bg-amber-100 cursor-pointer"
+              >
+                Abrir Painel Completo
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsInlineMoveMode(false)}
+                className="px-2.5 py-1 bg-slate-900 text-white rounded-md font-semibold hover:bg-slate-800 cursor-pointer"
+              >
+                Concluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 2. MAIN CONTAINER */}
       <main className="max-w-7xl mx-auto px-2 sm:px-4 md:px-6 lg:px-8 py-3 sm:py-5 space-y-4 relative w-full">
@@ -764,11 +1007,18 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 2: DASHBOARD EXECUTIVO */}
+        {/* VIEW 2: DASHBOARD EXECUTIVO (BLOCOS REORDENÁVEIS) */}
         {activeTab === 'dashboard' && (
-          <>
-            {/* LOOKER STUDIO FILTER CONTROL BAR */}
-            <section className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+          <div className="space-y-4">
+            {layoutPrefs.dashboardOrder.map((blockId, blockIdx) => {
+              const blockMeta = DASHBOARD_BLOCK_META[blockId];
+              let blockContent: React.ReactNode = null;
+
+              if (blockId === 'filters') {
+                blockContent = (
+                  <>
+                    {/* LOOKER STUDIO FILTER CONTROL BAR */}
+                    <section className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-xs font-bold text-slate-700 shrink-0">
                   <div className="w-5 h-5 rounded bg-slate-100 flex items-center justify-center text-slate-600">
@@ -846,9 +1096,13 @@ export default function App() {
                 </div>
               </div>
             </section>
-
-            {/* 6 EXECUTIVE SCORECARDS */}
-            <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                  </>
+                );
+              } else if (blockId === 'scorecards') {
+                blockContent = (
+                  <>
+                    {/* 6 EXECUTIVE SCORECARDS */}
+                    <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
               {/* Card 1: Meta Total */}
               <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs hover:border-slate-300 transition-colors">
                 <div className="flex items-center justify-between text-slate-500 mb-1">
@@ -989,14 +1243,19 @@ export default function App() {
                 </div>
               </div>
             </section>
-
-            {/* GRÁFICO DE LINHA */}
-            <section>
-              <CumulativeLineChart items={items} formatBRL={formatBRL} />
-            </section>
-
-            {/* CHARTS ROW */}
-            <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                  </>
+                );
+              } else if (blockId === 'cumulativeChart') {
+                blockContent = (
+                  <section>
+                    <CumulativeLineChart items={items} formatBRL={formatBRL} />
+                  </section>
+                );
+              } else if (blockId === 'monthlyCharts') {
+                blockContent = (
+                  <>
+                    {/* CHARTS ROW */}
+                    <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
               {/* Comparative Column Chart (8 Columns) */}
               <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -1188,9 +1447,13 @@ export default function App() {
                 </div>
               </div>
             </section>
-
-            {/* MONTHLY BREAKDOWN TABLE */}
-            <section className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                  </>
+                );
+              } else if (blockId === 'monthlyTable') {
+                blockContent = (
+                  <>
+                    {/* MONTHLY BREAKDOWN TABLE */}
+                    <section className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
               <div className="p-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 bg-slate-50">
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
                   <Table className="w-4 h-4 text-blue-600" />
@@ -1293,7 +1556,64 @@ export default function App() {
                 </table>
               </div>
             </section>
-          </>
+                  </>
+                );
+              }
+
+              return (
+                <div
+                  key={blockId}
+                  draggable={isInlineMoveMode}
+                  onDragStart={() => setDragState({ kind: 'dashboard', index: blockIdx })}
+                  onDragOver={(e) => {
+                    if (isInlineMoveMode) e.preventDefault();
+                  }}
+                  onDrop={() => {
+                    if (dragState?.kind === 'dashboard') {
+                      moveDashboardBlock(dragState.index, blockIdx);
+                    }
+                    setDragState(null);
+                  }}
+                  onDragEnd={() => setDragState(null)}
+                  className={
+                    isInlineMoveMode
+                      ? 'rounded-xl border-2 border-dashed border-amber-400 bg-amber-50/30 p-2 space-y-2 transition-all'
+                      : ''
+                  }
+                >
+                  {isInlineMoveMode && (
+                    <div className="flex items-center justify-between gap-2 px-2 py-1 bg-amber-100/90 rounded-lg text-xs text-amber-950">
+                      <div className="flex items-center gap-1.5 font-bold cursor-grab">
+                        <GripVertical className="w-4 h-4 text-amber-700" />
+                        <span>{blockIdx + 1}. {blockMeta.label}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={blockIdx === 0}
+                          onClick={() => moveDashboardBlock(blockIdx, blockIdx - 1)}
+                          className="p-1 bg-white border border-amber-300 rounded hover:bg-amber-50 disabled:opacity-35 cursor-pointer"
+                          title="Subir bloco"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={blockIdx === layoutPrefs.dashboardOrder.length - 1}
+                          onClick={() => moveDashboardBlock(blockIdx, blockIdx + 1)}
+                          className="p-1 bg-white border border-amber-300 rounded hover:bg-amber-50 disabled:opacity-35 cursor-pointer"
+                          title="Descer bloco"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {blockContent}
+                </div>
+              );
+            })}
+          </div>
         )}
 
         {/* VIEW 3: TABELA DETALHADA DOS 365 DEPÓSITOS */}
@@ -1341,13 +1661,67 @@ export default function App() {
               <table className="w-full text-left border-collapse text-xs">
                 <thead className="sticky top-0 bg-slate-100 z-10 border-b border-slate-200 text-slate-700 font-semibold">
                   <tr>
-                    <th className="py-2 px-3 w-12 text-center">Status</th>
-                    <th className="py-2 px-3 w-16 text-center">Nº</th>
-                    <th className="py-2 px-3">Mês de Referência</th>
-                    <th className="py-2 px-3 hidden md:table-cell">Trimestre</th>
-                    <th className="py-2 px-3 text-right">Valor do Depósito</th>
-                    <th className="py-2 px-3">Data do Depósito</th>
-                    <th className="py-2 px-3">Observações</th>
+                    {layoutPrefs.tableColumnOrder.map((colId: DepositTableColumnId, colIdx: number) => {
+                      const colMeta = TABLE_COLUMN_META[colId];
+                      const alignClass =
+                        colId === 'status' || colId === 'numero'
+                          ? 'text-center'
+                          : colId === 'valor'
+                          ? 'text-right'
+                          : 'text-left';
+                      return (
+                        <th
+                          key={colId}
+                          draggable
+                          onDragStart={() => setDragState({ kind: 'column', index: colIdx })}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (dragState?.kind === 'column') {
+                              moveTableColumn(dragState.index, colIdx);
+                            }
+                            setDragState(null);
+                          }}
+                          onDragEnd={() => setDragState(null)}
+                          title="Arraste para reordenar esta coluna"
+                          className={`py-2 px-3 ${alignClass} cursor-grab active:cursor-grabbing select-none hover:bg-slate-200/70 transition-colors`}
+                        >
+                          <div
+                            className={`inline-flex items-center gap-1 ${
+                              colId === 'valor'
+                                ? 'justify-end w-full'
+                                : colId === 'status' || colId === 'numero'
+                                ? 'justify-center w-full'
+                                : ''
+                            }`}
+                          >
+                            {isInlineMoveMode && (
+                              <button
+                                type="button"
+                                disabled={colIdx === 0}
+                                onClick={() => moveTableColumn(colIdx, colIdx - 1)}
+                                className="p-0.5 text-amber-700 hover:bg-amber-100 rounded disabled:opacity-30 cursor-pointer"
+                                title="Mover coluna para a esquerda"
+                              >
+                                <ArrowLeft className="w-3 h-3" />
+                              </button>
+                            )}
+                            <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span>{colMeta.label}</span>
+                            {isInlineMoveMode && (
+                              <button
+                                type="button"
+                                disabled={colIdx === layoutPrefs.tableColumnOrder.length - 1}
+                                onClick={() => moveTableColumn(colIdx, colIdx + 1)}
+                                className="p-0.5 text-amber-700 hover:bg-amber-100 rounded disabled:opacity-30 cursor-pointer"
+                                title="Mover coluna para a direita"
+                              >
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-normal">
@@ -1361,28 +1735,57 @@ export default function App() {
                           isDone ? 'bg-emerald-50/40' : ''
                         }`}
                       >
-                        <td className="py-2 px-3 text-center">
-                          <input
-                            type="checkbox"
-                            checked={isDone}
-                            onChange={() => handleToggle(item.numero)}
-                            className="w-4 h-4 text-emerald-600 rounded cursor-pointer"
-                          />
-                        </td>
-                        <td className="py-2 px-3 text-center font-mono font-semibold text-slate-600">
-                          #{String(item.numero).padStart(3, '0')}
-                        </td>
-                        <td className="py-2 px-3 font-medium text-slate-800">{item.mes}</td>
-                        <td className="py-2 px-3 text-slate-500 hidden md:table-cell">{item.trimestre}</td>
-                        <td className="py-2 px-3 text-right font-mono font-bold text-slate-900 tabular-nums">
-                          {formatBRL(item.valor)}
-                        </td>
-                        <td className="py-2 px-3 font-mono text-[11px] text-slate-600">
-                          {item.data || '—'}
-                        </td>
-                        <td className="py-2 px-3 text-slate-600">
-                          {item.observacoes || '—'}
-                        </td>
+                        {layoutPrefs.tableColumnOrder.map((colId) => {
+                          switch (colId) {
+                            case 'status':
+                              return (
+                                <td key={colId} className="py-2 px-3 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={isDone}
+                                    onChange={() => handleToggle(item.numero)}
+                                    className="w-4 h-4 text-emerald-600 rounded cursor-pointer"
+                                  />
+                                </td>
+                              );
+                            case 'numero':
+                              return (
+                                <td key={colId} className="py-2 px-3 text-center font-mono font-semibold text-slate-600">
+                                  #{String(item.numero).padStart(3, '0')}
+                                </td>
+                              );
+                            case 'mes':
+                              return (
+                                <td key={colId} className="py-2 px-3 font-medium text-slate-800">
+                                  {item.mes}
+                                </td>
+                              );
+                            case 'trimestre':
+                              return (
+                                <td key={colId} className="py-2 px-3 text-slate-500">
+                                  {item.trimestre}
+                                </td>
+                              );
+                            case 'valor':
+                              return (
+                                <td key={colId} className="py-2 px-3 text-right font-mono font-bold text-slate-900 tabular-nums">
+                                  {formatBRL(item.valor)}
+                                </td>
+                              );
+                            case 'data':
+                              return (
+                                <td key={colId} className="py-2 px-3 font-mono text-[11px] text-slate-600">
+                                  {item.data || '—'}
+                                </td>
+                              );
+                            case 'observacoes':
+                              return (
+                                <td key={colId} className="py-2 px-3 text-slate-600">
+                                  {item.observacoes || '—'}
+                                </td>
+                              );
+                          }
+                        })}
                       </tr>
                     );
                   })}
@@ -1524,14 +1927,48 @@ export default function App() {
             formatBRL={formatBRL}
           />
         )}
+
+        {/* VIEW 6: RENOMEAR MEU DESAFIO & NOMES DOS PARTICIPANTES */}
+        {activeTab === 'names' && (
+          <ChallengeNamesTab
+            challenges={orderedChallenges}
+            activeChallengeId={activeChallenge?.id ?? null}
+            userDisplayName={user.displayName || null}
+            onSelectChallenge={handleSelectChallenge}
+            onRenameChallenge={handleRenameChallenge}
+            onCreateChallenge={handleCreateChallenge}
+            onCreateMultipleChallenges={handleCreateMultipleChallenges}
+            onDeleteChallenge={handleDeleteChallenge}
+            formatBRL={formatBRL}
+          />
+        )}
+
+        {/* VIEW 7: CONTAS (MINHA CONTA & CRIAR PARA OUTRA PESSOA) */}
+        {activeTab === 'accounts' && (
+          <AccountManagementPanel user={user} onSignOut={handleSignOut} />
+        )}
       </main>
+      <OfflineIndicator />
+
+      {/* Always-Accessible Layout Organizer Drawer */}
+      <LayoutOrganizerModal
+        isOpen={isOrganizerOpen}
+        onClose={() => setIsOrganizerOpen(false)}
+        challenges={orderedChallenges}
+        activeChallengeId={activeChallenge?.id ?? null}
+        layoutPrefs={layoutPrefs}
+        isInlineMoveMode={isInlineMoveMode}
+        onToggleInlineMoveMode={() => setIsInlineMoveMode((v) => !v)}
+        onUpdateLayoutPrefs={handleUpdateLayoutPrefs}
+        onSelectChallenge={handleSelectChallenge}
+      />
 
       {/* Modals: Challenge Instance Manager & Cloud Backup */}
       <ChallengeInstanceModal
         isOpen={needsOnboarding || isInstanceModalOpen}
         canClose={!needsOnboarding}
         onClose={() => setIsInstanceModalOpen(false)}
-        challenges={challenges}
+        challenges={orderedChallenges}
         activeChallengeId={activeChallenge?.id ?? null}
         onSelectChallenge={handleSelectChallenge}
         onCreateChallenge={handleCreateChallenge}
