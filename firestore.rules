@@ -1,0 +1,295 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Hardened Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Validation Blueprint: UserProfile
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'activeChallengeId', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && data.uid == request.auth.uid
+        && data.uid == userId
+        && isValidId(data.uid)
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 120
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.photoURL is string
+        && data.photoURL.size() <= 500
+        && (!data.keys().hasAny(['activeChallengeId']) || (data.activeChallengeId is string && isValidId(data.activeChallengeId)))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: ChallengeInstance
+    function isValidChallengeInstance(data, userId, challengeId) {
+      return data.keys().hasAll(['id', 'ownerId', 'title', 'goalAmount', 'markerColor', 'paidDeposits', 'customNotes', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'title', 'goalAmount', 'markerColor', 'paidDeposits', 'customNotes', 'createdAt', 'updatedAt'])
+        && data.id is string
+        && data.id == challengeId
+        && isValidId(data.id)
+        && data.ownerId is string
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 80
+        && data.goalAmount is number
+        && data.goalAmount == 30000
+        && data.markerColor is string
+        && data.markerColor.size() <= 10
+        && data.markerColor in ['yellow', 'red', 'green']
+        && data.paidDeposits is map
+        && data.paidDeposits.size() <= 365
+        && data.customNotes is map
+        && data.customNotes.size() <= 365
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: MovementEntry
+    function isValidMovement(data, userId, challengeId, movementId) {
+      return data.keys().hasAll(['id', 'ownerId', 'challengeId', 'type', 'depositNumber', 'amount', 'description', 'createdAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'challengeId', 'type', 'depositNumber', 'amount', 'description', 'createdAt'])
+        && data.id is string
+        && data.id == movementId
+        && isValidId(data.id)
+        && data.ownerId is string
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && data.challengeId is string
+        && data.challengeId == challengeId
+        && isValidId(data.challengeId)
+        && data.type is string
+        && data.type.size() <= 20
+        && data.type in ['deposit', 'undo', 'reset', 'restore']
+        && data.depositNumber is int
+        && data.depositNumber >= 0
+        && data.depositNumber <= 365
+        && data.amount is number
+        && data.amount >= 0
+        && data.amount <= 30000
+        && data.description is string
+        && data.description.size() >= 1
+        && data.description.size() <= 160
+        && data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint: BackupSnapshot
+    function isValidBackupSnapshot(data, userId, backupId) {
+      return data.keys().hasAll(['id', 'ownerId', 'challengeId', 'challengeTitle', 'paidCount', 'totalSaved', 'paidDeposits', 'customNotes', 'createdAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'challengeId', 'challengeTitle', 'paidCount', 'totalSaved', 'paidDeposits', 'customNotes', 'createdAt'])
+        && data.id is string
+        && data.id == backupId
+        && isValidId(data.id)
+        && data.ownerId is string
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.ownerId)
+        && data.challengeId is string
+        && isValidId(data.challengeId)
+        && data.challengeTitle is string
+        && data.challengeTitle.size() >= 1
+        && data.challengeTitle.size() <= 80
+        && data.paidCount is int
+        && data.paidCount >= 0
+        && data.paidCount <= 365
+        && data.totalSaved is number
+        && data.totalSaved >= 0
+        && data.totalSaved <= 30000
+        && data.paidDeposits is map
+        && data.paidDeposits.size() <= 365
+        && data.customNotes is map
+        && data.customNotes.size() <= 365
+        && data.createdAt is timestamp;
+    }
+
+    // Collection: /users/{userId}
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isSignedIn()
+        && isEmailVerified()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn()
+        && isEmailVerified()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'activeChallengeId', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly(['activeChallengeId', 'updatedAt'])
+        );
+
+      allow delete: if false;
+
+      // Subcollection: /users/{userId}/challenges/{challengeId}
+      match /challenges/{challengeId} {
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(challengeId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid;
+
+        allow list: if isSignedIn()
+          && isValidId(userId)
+          && isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isSignedIn()
+          && isEmailVerified()
+          && isValidId(userId)
+          && isValidId(challengeId)
+          && isOwner(userId)
+          && isValidChallengeInstance(incoming(), userId, challengeId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+
+        allow update: if isSignedIn()
+          && isEmailVerified()
+          && isValidId(userId)
+          && isValidId(challengeId)
+          && isOwner(userId)
+          && isValidChallengeInstance(incoming(), userId, challengeId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['paidDeposits', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['customNotes', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['paidDeposits', 'customNotes', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['markerColor', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt'])
+          );
+
+        allow delete: if isSignedIn()
+          && isEmailVerified()
+          && isValidId(userId)
+          && isValidId(challengeId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid
+          && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+
+        // Subcollection: /users/{userId}/challenges/{challengeId}/movements/{movementId}
+        match /movements/{movementId} {
+          allow get: if isSignedIn()
+            && isValidId(userId)
+            && isValidId(challengeId)
+            && isValidId(movementId)
+            && isOwner(userId)
+            && existing().ownerId == request.auth.uid;
+
+          allow list: if isSignedIn()
+            && isValidId(userId)
+            && isValidId(challengeId)
+            && isOwner(userId)
+            && resource.data.ownerId == request.auth.uid
+            && resource.data.challengeId == challengeId;
+
+          allow create: if isSignedIn()
+            && isEmailVerified()
+            && isValidId(userId)
+            && isValidId(challengeId)
+            && isValidId(movementId)
+            && isOwner(userId)
+            && isValidMovement(incoming(), userId, challengeId, movementId)
+            && incoming().createdAt == request.time
+            && exists(/databases/$(database)/documents/users/$(userId)/challenges/$(challengeId))
+            && get(/databases/$(database)/documents/users/$(userId)/challenges/$(challengeId)).data.ownerId == request.auth.uid;
+
+          allow update: if false;
+
+          allow delete: if isSignedIn()
+            && isEmailVerified()
+            && isValidId(userId)
+            && isValidId(challengeId)
+            && isValidId(movementId)
+            && isOwner(userId)
+            && existing().ownerId == request.auth.uid
+            && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+        }
+      }
+
+      // Subcollection: /users/{userId}/backups/{backupId}
+      match /backups/{backupId} {
+        allow get: if isSignedIn()
+          && isValidId(userId)
+          && isValidId(backupId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid;
+
+        allow list: if isSignedIn()
+          && isValidId(userId)
+          && isOwner(userId)
+          && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isSignedIn()
+          && isEmailVerified()
+          && isValidId(userId)
+          && isValidId(backupId)
+          && isOwner(userId)
+          && isValidBackupSnapshot(incoming(), userId, backupId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+
+        allow update: if false;
+
+        allow delete: if isSignedIn()
+          && isEmailVerified()
+          && isValidId(userId)
+          && isValidId(backupId)
+          && isOwner(userId)
+          && existing().ownerId == request.auth.uid
+          && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+      }
+    }
+  }
+}

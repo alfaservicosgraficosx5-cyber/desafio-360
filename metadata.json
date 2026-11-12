@@ -1,0 +1,8 @@
+{
+  "name": "Remix 365 Deposit Challenge Tracker",
+  "description": "An interactive Looker Studio dashboard to monitor your 365-day savings progress, financial goals, and monthly deposit milestones.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

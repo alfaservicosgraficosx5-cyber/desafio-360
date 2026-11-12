@@ -1,0 +1,266 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private profile for an authenticated user and their active challenge reference.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified user email address.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Optional avatar URL.",
+          "maxLength": 500
+        },
+        "activeChallengeId": {
+          "type": "string",
+          "description": "ID of the currently selected challenge instance.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": ["uid", "displayName", "email", "photoURL", "createdAt", "updatedAt"]
+    },
+    "ChallengeInstance": {
+      "title": "ChallengeInstance",
+      "description": "Individual 365-day deposit challenge instance owned by a user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Challenge document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the challenge owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "User-defined name for this challenge instance.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "goalAmount": {
+          "type": "number",
+          "description": "Total target amount in BRL (default 30000)."
+        },
+        "markerColor": {
+          "type": "string",
+          "description": "Visual marker color for completed squares.",
+          "enum": ["yellow", "red", "green"],
+          "maxLength": 10
+        },
+        "paidDeposits": {
+          "type": "object",
+          "description": "Map of paid deposit numbers ('1'-'365') to ISO date strings ('YYYY-MM-DD')."
+        },
+        "customNotes": {
+          "type": "object",
+          "description": "Map of deposit numbers ('1'-'365') to optional user notes."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the challenge was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the challenge was last modified."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "title",
+        "goalAmount",
+        "markerColor",
+        "paidDeposits",
+        "customNotes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MovementEntry": {
+      "title": "MovementEntry",
+      "description": "Immutable movement history entry for a user's deposit action.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Movement document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "challengeId": {
+          "type": "string",
+          "description": "Parent challenge instance ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "description": "Movement type.",
+          "enum": ["deposit", "undo", "reset", "restore"],
+          "maxLength": 20
+        },
+        "depositNumber": {
+          "type": "integer",
+          "description": "Deposit number (1-365) or 0 for batch actions."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Amount in BRL."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable movement description.",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the movement."
+        }
+      },
+      "required": ["id", "ownerId", "challengeId", "type", "depositNumber", "amount", "description", "createdAt"]
+    },
+    "BackupSnapshot": {
+      "title": "BackupSnapshot",
+      "description": "Private cloud backup snapshot owned by a specific authenticated user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Backup document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "challengeId": {
+          "type": "string",
+          "description": "Source challenge ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "challengeTitle": {
+          "type": "string",
+          "description": "Title of the backed-up challenge.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "paidCount": {
+          "type": "integer",
+          "description": "Number of paid deposits in snapshot."
+        },
+        "totalSaved": {
+          "type": "number",
+          "description": "Total BRL saved in snapshot."
+        },
+        "paidDeposits": {
+          "type": "object",
+          "description": "Snapshot of paidDeposits map."
+        },
+        "customNotes": {
+          "type": "object",
+          "description": "Snapshot of customNotes map."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the backup was created."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "challengeId",
+        "challengeTitle",
+        "paidCount",
+        "totalSaved",
+        "paidDeposits",
+        "customNotes",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Stores each authenticated user's profile and active challenge selection."
+    },
+    "/users/{userId}/challenges/{challengeId}": {
+      "schema": {
+        "$ref": "#/entities/ChallengeInstance"
+      },
+      "description": "Stores each user's individual 365 deposit challenge instances."
+    },
+    "/users/{userId}/challenges/{challengeId}/movements/{movementId}": {
+      "schema": {
+        "$ref": "#/entities/MovementEntry"
+      },
+      "description": "Stores immutable deposit/undo/reset movement history per user challenge."
+    },
+    "/users/{userId}/backups/{backupId}": {
+      "schema": {
+        "$ref": "#/entities/BackupSnapshot"
+      },
+      "description": "Stores private cloud backup snapshots per user."
+    }
+  }
+}
